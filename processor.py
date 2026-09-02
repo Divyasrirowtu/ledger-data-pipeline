@@ -1,11 +1,13 @@
 import csv
 import os
 import sys
+from datetime import datetime
 from decimal import Decimal
 
+import boto3
 import psycopg2
 from dotenv import load_dotenv
-
+from botocore.exceptions import ClientError
 
 # Load environment variables
 load_dotenv()
@@ -17,6 +19,25 @@ DB_USER = os.getenv("POSTGRES_USER", "ledger_user")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "ledger_password")
 DB_NAME = os.getenv("POSTGRES_DB", "ledger_db")
 
+MINIO_ENDPOINT = os.getenv(
+    "MINIO_ENDPOINT",
+    "http://localhost:9000"
+)
+
+MINIO_ACCESS_KEY = os.getenv(
+    "MINIO_ACCESS_KEY",
+    "minioadmin"
+)
+
+MINIO_SECRET_KEY = os.getenv(
+    "MINIO_SECRET_KEY",
+    "minioadmin123"
+)
+
+MINIO_BUCKET = os.getenv(
+    "MINIO_BUCKET",
+    "ledger-archive"
+)
 
 def get_connection():
     """Create a PostgreSQL database connection."""
@@ -277,4 +298,61 @@ def main():
 
 
 if __name__ == "__main__":
+    def archive_csv_to_minio(csv_path):
+    """
+    Upload the processed CSV file to MinIO using
+    Hive-style partitioning:
+    processed/year=YYYY/month=MM/day=DD/
+    """
+
+    try:
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            region_name="us-east-1",
+        )
+
+        # Check whether bucket exists
+        try:
+            s3_client.head_bucket(
+                Bucket=MINIO_BUCKET
+            )
+
+        except ClientError:
+            # Create bucket if it doesn't exist
+            s3_client.create_bucket(
+                Bucket=MINIO_BUCKET
+            )
+
+        now = datetime.now()
+
+        filename = os.path.basename(csv_path)
+
+        object_key = (
+            f"processed/"
+            f"year={now.year}/"
+            f"month={now.month:02d}/"
+            f"day={now.day:02d}/"
+            f"{filename}"
+        )
+
+        s3_client.upload_file(
+            csv_path,
+            MINIO_BUCKET,
+            object_key
+        )
+
+        print(
+            f"ARCHIVED: "
+            f"s3://{MINIO_BUCKET}/{object_key}"
+        )
+
+    except Exception as error:
+        print(
+            f"ERROR: Could not archive CSV to MinIO: "
+            f"{error}"
+        )
+        raise
     main()
